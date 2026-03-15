@@ -1,39 +1,37 @@
 from fastapi import APIRouter, HTTPException, Depends
-from sqlalchemy.orm import Session
 from app.database.db import get_db
 from app.schemas.user_schema import LoginRequest
 from app.utils.auth import create_access_token, create_refresh_token
 from app.utils.response import api_response
 import bcrypt
-from sqlalchemy import text
 
 router = APIRouter()
 
 @router.post("/login")
-def login(data: LoginRequest, db: Session = Depends(get_db)):
+def login(data: LoginRequest, db = Depends(get_db)):
     try:
-        isSuperadmin = 0;
+        isSuperadmin = 0
 
         if not data.email or not data.password:
-            return api_response(False, "Email and password required", {}, 400);
+            return api_response(False, "Email and password required", {}, 400)
 
-        # check in superadmin table
-        query = text("SELECT * FROM superadmin WHERE email=:email")
-        result = db.execute(query, {"email": data.email})
-        user = result.fetchone();
+        with db.cursor() as cursor:
 
-        if user:
-            isSuperadmin = 1;
-        else:
-            query = text("SELECT * FROM muc_user WHERE email = :email")
-            result = db.execute(query, {"email": data.email})
-            user = result.fetchone();
-            isSuperadmin = 0;
+            # check superadmin
+            query = "SELECT * FROM superadmin WHERE email=%s"
+            cursor.execute(query, (data.email,))
+            user = cursor.fetchone()
+
+            if user:
+                isSuperadmin = 1
+            else:
+                query = "SELECT * FROM muc_user WHERE email=%s"
+                cursor.execute(query, (data.email,))
+                user = cursor.fetchone()
+                isSuperadmin = 0
 
         if not user:
             raise HTTPException(status_code=401, detail="Invalid email")
-
-        user = dict(user._mapping)
 
         # password check
         if not bcrypt.checkpw(data.password.encode(), user["password"].encode()):
@@ -41,11 +39,13 @@ def login(data: LoginRequest, db: Session = Depends(get_db)):
 
         token = create_access_token({
             "user_id": user["superadmin_id"] if isSuperadmin else user["user_id"],
+            "company_id" : user["superadmin_id"] if isSuperadmin else user["company_id"],
             "email": user["email"]
         })
 
         refresh_token = create_refresh_token({
             "user_id": user["superadmin_id"] if isSuperadmin else user["user_id"],
+            "company_id" : user["superadmin_id"] if isSuperadmin else user["company_id"],
             "email": user["email"]
         })
 
@@ -56,17 +56,17 @@ def login(data: LoginRequest, db: Session = Depends(get_db)):
             "email": user["email"],
             "company_id": user["superadmin_id"] if isSuperadmin else user["company_id"],
             "rate_per_cane": 0 if isSuperadmin else user["rate_per_cane"],
-            "isSuperadmin":isSuperadmin,
+            "isSuperadmin": isSuperadmin,
             "water_department": user["water_department"] if isSuperadmin else (1 if user["company_id"] == 1 else 0),
             "access_token": token,
             "refresh_token": refresh_token,
-            "token_type": "bearer",
+            "token" : token,
+            "token_type": "bearer"
         }
 
         return api_response(True, "User login successful", re_data, 200)
-        
+
     except HTTPException as e:
-        # rethrow HTTP exceptions
         raise e
 
     except Exception as e:
